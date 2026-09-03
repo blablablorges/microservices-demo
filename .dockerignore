@@ -1,0 +1,3 @@
+# Rust build contexts are the repo root (COPY protos, src/lib, src/<svc>); keep local build output and history out of them.
+**/target/
+.git/
