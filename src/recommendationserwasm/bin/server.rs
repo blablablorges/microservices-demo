@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::transport::{Channel, Endpoint, Server};
+use tonic::{Request, Response, Status};
 
 pub mod hipstershop {
     tonic::include_proto!("hipstershop");
@@ -14,24 +15,19 @@ use hipstershop::recommendation_service_server::{RecommendationService, Recommen
 use hipstershop::{Empty, ListRecommendationsRequest, ListRecommendationsResponse};
 
 // ---------------------------------------------------------------------------
-// Native catalog adapter — uses a tonic gRPC client
-// build_transport(false) means no generated connect() shortcut, so we build
-// the channel via tonic::transport::Endpoint directly.
+// Native catalog adapter — one tonic channel for the process lifetime, as the
+// Python service holds one grpc channel. build_transport(false) means no
+// generated connect() shortcut, so the channel comes from Endpoint.
 // ---------------------------------------------------------------------------
 
 struct TonicCatalogClient {
-    addr: String,
+    channel: Channel,
 }
 
 #[tonic::async_trait]
 impl CatalogClient for TonicCatalogClient {
     async fn list_product_ids(&self) -> Result<Vec<String>, String> {
-        let endpoint =
-            tonic::transport::Endpoint::from_shared(format!("http://{}", self.addr))
-                .map_err(|e| e.to_string())?;
-        let channel = endpoint.connect().await.map_err(|e| e.to_string())?;
-        let mut client = ProductCatalogServiceClient::new(channel);
-        let resp = client
+        let resp = ProductCatalogServiceClient::new(self.channel.clone())
             .list_products(Empty {})
             .await
             .map_err(|e| e.to_string())?;
@@ -43,7 +39,9 @@ impl CatalogClient for TonicCatalogClient {
 // gRPC service — delegates entirely to core logic
 // ---------------------------------------------------------------------------
 
-struct RecommendationServiceImpl;
+struct RecommendationServiceImpl {
+    catalog: TonicCatalogClient,
+}
 
 #[tonic::async_trait]
 impl RecommendationService for RecommendationServiceImpl {
@@ -51,10 +49,7 @@ impl RecommendationService for RecommendationServiceImpl {
         &self,
         request: Request<ListRecommendationsRequest>,
     ) -> Result<Response<ListRecommendationsResponse>, Status> {
-        let addr = std::env::var("PRODUCT_CATALOG_SERVICE_ADDR")
-            .unwrap_or_else(|_| "localhost:3550".to_string());
-        let client = TonicCatalogClient { addr };
-        core::list_recommendations(&client, request.get_ref())
+        core::list_recommendations(&self.catalog, request.get_ref())
             .await
             .map(Response::new)
     }
@@ -71,6 +66,16 @@ async fn main() -> Result<()> {
         .parse()
         .context("invalid listen address")?;
 
+    let catalog_addr = std::env::var("PRODUCT_CATALOG_SERVICE_ADDR")
+        .unwrap_or_else(|_| "localhost:3550".to_string());
+    let service = RecommendationServiceImpl {
+        catalog: TonicCatalogClient {
+            channel: Endpoint::from_shared(format!("http://{}", catalog_addr))
+                .context("invalid PRODUCT_CATALOG_SERVICE_ADDR")?
+                .connect_lazy(),
+        },
+    };
+
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
         .set_serving::<RecommendationServiceServer<RecommendationServiceImpl>>()
@@ -80,7 +85,7 @@ async fn main() -> Result<()> {
 
     Server::builder()
         .add_service(health_service)
-        .add_service(RecommendationServiceServer::new(RecommendationServiceImpl))
+        .add_service(RecommendationServiceServer::new(service))
         .serve(addr)
         .await
         .context("gRPC server failed")?;

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
+use redis::aio::MultiplexedConnection;
 use redis::AsyncCommands;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tonic::{transport::Server, Request, Response, Status};
 
 pub mod hipstershop {
@@ -15,33 +16,48 @@ use hipstershop::cart_service_server::{CartService, CartServiceServer};
 use hipstershop::{AddItemRequest, Cart, Empty, EmptyCartRequest, GetCartRequest};
 
 // ---------------------------------------------------------------------------
-// Native Redis adapter — satisfies CartStore using the redis crate
+// Native Redis adapter — one multiplexed connection for the process lifetime,
+// as StackExchange.Redis does in the upstream cart; re-dialed after an error.
 // ---------------------------------------------------------------------------
 
 struct RedisStore {
     client: redis::Client,
+    conn: Mutex<Option<MultiplexedConnection>>,
+}
+
+impl RedisStore {
+    async fn conn(&self) -> Result<MultiplexedConnection, String> {
+        let cached = self.conn.lock().unwrap().clone();
+        if let Some(c) = cached {
+            return Ok(c);
+        }
+        let c = self
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|e| e.to_string())?;
+        *self.conn.lock().unwrap() = Some(c.clone());
+        Ok(c)
+    }
+
+    fn failed(&self, e: redis::RedisError) -> String {
+        if e.is_connection_dropped() || e.is_io_error() {
+            *self.conn.lock().unwrap() = None;
+        }
+        e.to_string()
+    }
 }
 
 #[tonic::async_trait]
 impl CartStore for RedisStore {
     async fn load(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
-        let mut conn = self
-            .client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|e| e.to_string())?;
-        conn.get(key).await.map_err(|e| e.to_string())
+        let mut conn = self.conn().await?;
+        conn.get(key).await.map_err(|e| self.failed(e))
     }
 
     async fn save(&self, key: &str, data: Vec<u8>) -> Result<(), String> {
-        let mut conn = self
-            .client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|e| e.to_string())?;
-        conn.set::<_, _, ()>(key, data)
-            .await
-            .map_err(|e| e.to_string())
+        let mut conn = self.conn().await?;
+        conn.set::<_, _, ()>(key, data).await.map_err(|e| self.failed(e))
     }
 }
 
@@ -109,7 +125,7 @@ async fn main() -> Result<()> {
     let client = redis::Client::open(normalize_redis_url(&redis_addr))
         .context("failed to create Redis client")?;
     let service = CartServiceImpl {
-        store: Arc::new(RedisStore { client }),
+        store: Arc::new(RedisStore { client, conn: Mutex::new(None) }),
     };
 
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
