@@ -1,0 +1,16 @@
+# WP-H1: one flag set per target, identical in every service crate (asserted by
+# deployment_symmetry.py). Builds run on the control-plane VM, not the SUT, so
+# never target-cpu=native: x86-64-v3 (AVX2, no AVX-512) is the SUT ISA the
+# README asks for, and Cranelift precompiles on the SUT node with the same
+# feature set. crt-static: static glibc (nss_dns/nss_files are built in since
+# glibc 2.34) so the binary runs in a scratch image with the glibc allocator.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64-v3", "-C", "target-feature=+crt-static"]
+
+# The kind node image is linux/<host arch>; on Apple Silicon that is aarch64.
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# tokio gates `net` on wasm behind this cfg (tokio >= 1.51, WP-H3).
+[target.wasm32-wasip2]
+rustflags = ["--cfg", "tokio_unstable"]

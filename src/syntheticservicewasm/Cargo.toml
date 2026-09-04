@@ -42,3 +42,14 @@ redis = { version = "0.32", features = ["tokio-comp"] }
 
 [build-dependencies]
 tonic-build = { version = "0.13.1", features = ["prost"] }
+
+# WP-H1: identical in every service crate of both SUTs, asserted by
+# experimentes/orchestrator/deployment_symmetry.py. panic=abort because wasip2
+# cannot unwind; native gets the same so neither side pays for landing pads the
+# other lacks.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
