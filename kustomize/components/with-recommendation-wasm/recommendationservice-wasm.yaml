@@ -38,8 +38,7 @@ spec:
               - ALL
           privileged: false
           readOnlyRootFilesystem: true
-        image: ghcr.io/containerd/runwasi/recommendationserwasm:latest
-        imagePullPolicy: Never
+        image: recommendationserwasm
         ports:
         - containerPort: 8080
         env:

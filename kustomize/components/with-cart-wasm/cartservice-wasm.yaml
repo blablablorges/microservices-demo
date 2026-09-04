@@ -13,8 +13,7 @@ spec:
     spec:
       containers:
       - name: server
-        image: ghcr.io/containerd/runwasi/cartserwasm:latest
-        imagePullPolicy: Never
+        image: cartserwasm
         ports:
         - containerPort: 7070
         env:

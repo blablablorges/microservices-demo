@@ -35,8 +35,7 @@ spec:
           value: "128"
         - name: WASMTIME_HTTP_PROXY_SERVER_MODE
           value: h2
-        image: ghcr.io/containerd/runwasi/shippingserwasm:latest
-        imagePullPolicy: Never
+        image: shippingserwasm
         name: shippingservice-wasi
         ports:
         - containerPort: 8080

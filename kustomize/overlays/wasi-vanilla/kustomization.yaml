@@ -11,4 +11,3 @@ components:
   - ../../components/with-syntheticservice-docker
   - ../../components/with-cart-docker
   - ../../components/with-node-selector
-  - ../../components/container-pull-secrets

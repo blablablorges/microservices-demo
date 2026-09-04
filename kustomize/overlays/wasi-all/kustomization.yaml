@@ -11,4 +11,3 @@ components:
   - ../../components/with-cart-wasm
   - ../../components/with-syntheticservice-wasm
   - ../../components/with-node-selector
-  - ../../components/container-pull-secrets

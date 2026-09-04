@@ -42,7 +42,6 @@ spec:
           privileged: false
           readOnlyRootFilesystem: true
         image: shippingservice
-        imagePullPolicy: IfNotPresent  # <-- ADD THIS LINE
         ports:
         - containerPort: 50051
         env:

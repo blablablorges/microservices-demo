@@ -18,4 +18,3 @@ resources:
 - base
 # These two will be true for all experimentes
 # components:
-# - components/container-pull-secrets

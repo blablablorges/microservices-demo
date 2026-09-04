@@ -36,8 +36,7 @@ spec:
         runAsUser: 1000
       containers:
       - name: server
-        image: ghcr.io/containerd/runwasi/syntheticservicewasm:latest
-        imagePullPolicy: Never
+        image: syntheticservicewasm
         ports:
         - containerPort: 8080
         env:

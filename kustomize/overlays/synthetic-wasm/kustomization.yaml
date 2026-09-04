@@ -8,5 +8,4 @@ resources:
 components:
   - ../../components/with-syntheticservice-wasm
   - ../../components/with-node-selector
-  - ../../components/container-pull-secrets
   - ../../components/without-base
