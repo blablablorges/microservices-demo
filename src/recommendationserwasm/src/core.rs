@@ -27,7 +27,6 @@ pub async fn list_recommendations<C: CatalogClient>(
     let indices = random_sample_indices(filtered.len(), num_return);
     let selected: Vec<String> = indices.into_iter().map(|i| filtered[i].clone()).collect();
 
-    println!("[Recv ListRecommendations] returning product_ids={:?}", selected);
 
     Ok(ListRecommendationsResponse {
         product_ids: selected,
