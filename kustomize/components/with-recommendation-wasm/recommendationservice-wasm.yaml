@@ -11,6 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# WP-J2: identical to components/with-recommendation-docker/recommendationservice.yaml
+# except image and runtimeClassName. The guest owns its own listener on 8080 and
+# dials productcatalog itself, so there is no host-side proxy and no WASMTIME_* env.
 
 apiVersion: apps/v1
 kind: Deployment
@@ -27,8 +31,14 @@ spec:
       labels:
         app: recommendationservice
     spec:
+      runtimeClassName: wasmtime
       serviceAccountName: recommendationservice
       terminationGracePeriodSeconds: 5
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
       containers:
       - name: server
         securityContext:
@@ -43,21 +53,11 @@ spec:
         - containerPort: 8080
         env:
         - name: PORT
-          value: "0.0.0.0:8080"
+          value: "8080"
         - name: PRODUCT_CATALOG_SERVICE_ADDR
           value: "productcatalogservice:3550"
         - name: DISABLE_PROFILER
           value: "1"
-        - name: WASMTIME_HTTP_PROXY_SOCKET_ADDR
-          value: "0.0.0.0:8080"
-        - name: WASMTIME_HTTP_PROXY_ENABLE
-          value: "1"
-        - name: WASMTIME_HTTP_PROXY_BACKLOG
-          value: "128"
-        - name: WASMTIME_HTTP_PROXY_SERVER_MODE
-          value: h2
-        - name: WASMTIME_HTTP_PROXY_OUTGOING_H2C
-          value: "true"
         resources:
           requests:
             cpu: 100m
@@ -65,8 +65,6 @@ spec:
           limits:
             cpu: 200m
             memory: 450Mi
-      restartPolicy: Always
-      runtimeClassName: wasmtime
 ---
 apiVersion: v1
 kind: Service

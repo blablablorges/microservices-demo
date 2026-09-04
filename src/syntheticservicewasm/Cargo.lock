@@ -3589,3 +3589,11 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "mio"
+version = "1.2.3"
+
+[[patch.unused]]
+name = "tonic"
+version = "0.14.6"

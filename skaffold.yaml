@@ -102,21 +102,21 @@ build:
   - image: recommendationserwasm
     context: .
     custom:
-      buildCommand: hack/wasm-image.sh src/recommendationserwasm recommendationserwasm.wasm --lib
+      buildCommand: hack/wasm-image.sh src/recommendationserwasm server.wasm --bin server
       dependencies:
         paths: [src/recommendationserwasm/**, src/lib/**, protos/**, wit/**]
         ignore: ["**/target/**"]
   - image: cartserwasm
     context: .
     custom:
-      buildCommand: hack/wasm-image.sh src/cartserwasm cartserwasm.wasm --lib
+      buildCommand: hack/wasm-image.sh src/cartserwasm server.wasm --bin server
       dependencies:
         paths: [src/cartserwasm/**, src/lib/**, protos/**, wit/**]
         ignore: ["**/target/**"]
   - image: syntheticservicewasm
     context: .
     custom:
-      buildCommand: hack/wasm-image.sh src/syntheticservicewasm syntheticservicewasm.wasm --lib
+      buildCommand: hack/wasm-image.sh src/syntheticservicewasm server.wasm --bin server
       dependencies:
         paths: [src/syntheticservicewasm/**, src/lib/**, protos/**, wit/**]
         ignore: ["**/target/**"]

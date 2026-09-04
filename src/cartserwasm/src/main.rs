@@ -1,4 +1,10 @@
-use tonic::{Request, Response, Status};
+use anyhow::{Context, Result};
+use redis::aio::MultiplexedConnection;
+use redis::AsyncCommands;
+use std::sync::{Arc, Mutex};
+use tokio::net::TcpListener;
+use tokio_stream::wrappers::TcpListenerStream;
+use tonic::{transport::Server, Request, Response, Status};
 
 pub mod hipstershop {
     tonic::include_proto!("hipstershop");
@@ -6,61 +12,65 @@ pub mod hipstershop {
 
 mod core;
 
-// Host-pooled raw-TCP (Redis) import. The shim implements this interface,
-// owning the connection pool and RESP reply framing, so the guest no longer
-// opens a socket per command. Generated with the same wit-bindgen the `wasi`
-// crate uses, so they share one wit-bindgen-rt runtime (no duplicate symbols).
-mod pooled_tcp_bindings {
-    wit_bindgen::generate!({
-        inline: r#"
-package hybrid:microservices;
-
-interface pooled-tcp {
-  variant tcp-error {
-    unknown-upstream(string),
-    connect-failed(string),
-    timeout,
-    protocol(string),
-    io(string),
-  }
-  request: func(upstream: string, payload: list<u8>) -> result<list<u8>, tcp-error>;
-}
-
-world pooled-tcp-client {
-  import pooled-tcp;
-}
-"#,
-    });
-}
-use pooled_tcp_bindings::hybrid::microservices::pooled_tcp;
-
 use core::CartStore;
 use hipstershop::cart_service_server::{CartService, CartServiceServer};
 use hipstershop::{AddItemRequest, Cart, Empty, EmptyCartRequest, GetCartRequest};
 
 // ---------------------------------------------------------------------------
-// WASI Redis adapter — satisfies CartStore using raw TCP/RESP over wasi:sockets
+// Redis adapter — one multiplexed connection for the process lifetime, as
+// StackExchange.Redis does in the upstream cart; re-dialed after an error.
+// The same source on native and wasip2.
 // ---------------------------------------------------------------------------
 
-struct WasiRedis;
+struct RedisStore {
+    client: redis::Client,
+    conn: Mutex<Option<MultiplexedConnection>>,
+}
+
+impl RedisStore {
+    async fn conn(&self) -> Result<MultiplexedConnection, String> {
+        let cached = self.conn.lock().unwrap().clone();
+        if let Some(c) = cached {
+            return Ok(c);
+        }
+        let c = self
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|e| e.to_string())?;
+        *self.conn.lock().unwrap() = Some(c.clone());
+        Ok(c)
+    }
+
+    fn failed(&self, e: redis::RedisError) -> String {
+        if e.is_connection_dropped() || e.is_io_error() {
+            *self.conn.lock().unwrap() = None;
+        }
+        e.to_string()
+    }
+}
 
 #[tonic::async_trait]
-impl CartStore for WasiRedis {
+impl CartStore for RedisStore {
     async fn load(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
-        redis_get(key)
+        let mut conn = self.conn().await?;
+        conn.get(key).await.map_err(|e| self.failed(e))
     }
 
     async fn save(&self, key: &str, data: Vec<u8>) -> Result<(), String> {
-        redis_set(key, &data)
+        let mut conn = self.conn().await?;
+        conn.set::<_, _, ()>(key, data).await.map_err(|e| self.failed(e))
     }
 }
 
 // ---------------------------------------------------------------------------
-// gRPC component — delegates entirely to core logic
+// gRPC service — delegates entirely to core logic
 // ---------------------------------------------------------------------------
 
-#[wasi_grpc_server::grpc_component(CartServiceServer)]
-struct CartServiceImpl;
+#[derive(Clone)]
+struct CartServiceImpl {
+    store: Arc<RedisStore>,
+}
 
 #[tonic::async_trait]
 impl CartService for CartServiceImpl {
@@ -68,7 +78,7 @@ impl CartService for CartServiceImpl {
         &self,
         request: Request<AddItemRequest>,
     ) -> Result<Response<Empty>, Status> {
-        core::add_item(&WasiRedis, request.into_inner())
+        core::add_item(self.store.as_ref(), request.into_inner())
             .await
             .map(Response::new)
     }
@@ -77,7 +87,7 @@ impl CartService for CartServiceImpl {
         &self,
         request: Request<GetCartRequest>,
     ) -> Result<Response<Cart>, Status> {
-        core::get_cart(&WasiRedis, request.into_inner().user_id)
+        core::get_cart(self.store.as_ref(), request.into_inner().user_id)
             .await
             .map(Response::new)
     }
@@ -86,83 +96,59 @@ impl CartService for CartServiceImpl {
         &self,
         request: Request<EmptyCartRequest>,
     ) -> Result<Response<Empty>, Status> {
-        core::empty_cart(&WasiRedis, request.into_inner().user_id)
+        core::empty_cart(self.store.as_ref(), request.into_inner().user_id)
             .await
             .map(Response::new)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Minimal RESP client over wasi:sockets/tcp (WASI-specific, stays here)
+// Entry point
 // ---------------------------------------------------------------------------
 
-fn redis_addr() -> String {
-    std::env::var("REDIS_ADDR").unwrap_or_else(|_| "redis-cart:6379".to_string())
+fn normalize_redis_url(addr: &str) -> String {
+    if addr.starts_with("redis://") || addr.starts_with("rediss://") {
+        addr.to_string()
+    } else {
+        format!("redis://{}/", addr)
+    }
 }
 
-fn resp_encode(args: &[&[u8]]) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.push(b'*');
-    buf.extend_from_slice(args.len().to_string().as_bytes());
-    buf.extend_from_slice(b"\r\n");
-    for arg in args {
-        buf.push(b'$');
-        buf.extend_from_slice(arg.len().to_string().as_bytes());
-        buf.extend_from_slice(b"\r\n");
-        buf.extend_from_slice(arg);
-        buf.extend_from_slice(b"\r\n");
-    }
-    buf
-}
+// WP-J1/H3: one source for both targets. current_thread on both — wasip2 has no
+// threads, and the schedule has to be identical for the comparison to be fair.
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
+    let port: u16 = std::env::var("PORT")
+        .unwrap_or_else(|_| "7070".to_string())
+        .parse()
+        .context("invalid PORT")?;
+    let redis_addr =
+        std::env::var("REDIS_ADDR").unwrap_or_else(|_| "redis-cart:6379".to_string());
+    let addr = format!("0.0.0.0:{}", port);
 
-fn parse_bulk_string(buf: &[u8]) -> Result<Option<Vec<u8>>, String> {
-    if buf.is_empty() {
-        return Err("empty response".into());
-    }
-    if buf[0] == b'-' {
-        let msg = std::str::from_utf8(&buf[1..]).unwrap_or("unknown error").trim();
-        return Err(format!("Redis error: {}", msg));
-    }
-    if buf[0] != b'$' {
-        return Ok(None);
-    }
-    let crlf = buf
-        .windows(2)
-        .position(|w| w == b"\r\n")
-        .ok_or("malformed RESP")?;
-    let len_str =
-        std::str::from_utf8(&buf[1..crlf]).map_err(|e| format!("utf8: {}", e))?;
-    let len: i64 = len_str.parse().map_err(|e| format!("parse len: {}", e))?;
-    if len < 0 {
-        return Ok(None);
-    }
-    let data_start = crlf + 2;
-    let data_end = data_start + len as usize;
-    if buf.len() < data_end {
-        return Err("incomplete bulk string data".into());
-    }
-    Ok(Some(buf[data_start..data_end].to_vec()))
-}
+    let listener = TcpListener::bind(("0.0.0.0", port))
+        .await
+        .context("bind failed")?;
 
-fn redis_command(args: &[&[u8]]) -> Result<Vec<u8>, String> {
-    // The shim's host-pooled raw-TCP middleware owns the connection and the RESP
-    // reply framing and returns one complete reply, so we just hand it the
-    // encoded request. Connection reuse / keepalive / liveness live host-side.
-    let addr = redis_addr();
-    let payload = resp_encode(args);
-    pooled_tcp::request(&addr, &payload).map_err(|e| format!("pooled-tcp request failed: {e:?}"))
-}
+    let client = redis::Client::open(normalize_redis_url(&redis_addr))
+        .context("failed to create Redis client")?;
+    let service = CartServiceImpl {
+        store: Arc::new(RedisStore { client, conn: Mutex::new(None) }),
+    };
 
-fn redis_get(key: &str) -> Result<Option<Vec<u8>>, String> {
-    let resp = redis_command(&[b"GET", key.as_bytes()])?;
-    parse_bulk_string(&resp)
-}
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<CartServiceServer<CartServiceImpl>>()
+        .await;
 
-fn redis_set(key: &str, value: &[u8]) -> Result<(), String> {
-    let resp = redis_command(&[b"SET", key.as_bytes(), value])?;
-    if !resp.is_empty() && resp[0] == b'-' {
-        let msg = std::str::from_utf8(&resp[1..]).unwrap_or("unknown").trim();
-        return Err(format!("Redis SET error: {}", msg));
-    }
+    println!("CartService listening on {} (redis={})", addr, redis_addr);
+
+    Server::builder()
+        .add_service(health_service)
+        .add_service(CartServiceServer::new(service))
+        .serve_with_incoming(TcpListenerStream::new(listener))
+        .await
+        .context("gRPC server failed")?;
+
     Ok(())
 }

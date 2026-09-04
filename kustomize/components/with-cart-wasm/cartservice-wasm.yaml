@@ -1,7 +1,26 @@
+# Copyright 2018 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# WP-J2: identical to components/with-cart-docker/cartservice.yaml except image
+# and runtimeClassName. The guest owns its own listener on 7070 and dials Redis
+# itself over wasi:sockets, so there is no host-side proxy and no WASMTIME_* env.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cartservice
+  labels:
+    app: cartservice
 spec:
   selector:
     matchLabels:
@@ -11,35 +30,29 @@ spec:
       labels:
         app: cartservice
     spec:
+      runtimeClassName: wasmtime
+      serviceAccountName: cartservice
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
       containers:
       - name: server
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
         image: cartserwasm
         ports:
         - containerPort: 7070
         env:
-        - name: PORT
-          value: "7070"
         - name: REDIS_ADDR
           value: "redis-cart:6379"
-        # Declares the upstream to the shim's host-side pooled-tcp interface,
-        # with `resp` selecting RESP reply framing. Without it the shim rejects
-        # every call with TcpError::UnknownUpstream("redis-cart:6379") and the
-        # cart silently stores nothing — REDIS_ADDR above is only the guest's
-        # own view and grants no access on its own.
-        # Format is `authority=framing[,authority=framing]`; see
-        # containerd-shim-wasmtime/src/raw_tcp.rs RawTcpConfig::from_env.
-        - name: WASMTIME_RAWTCP_UPSTREAMS
-          value: "redis-cart:6379=resp"
-        - name: WASMTIME_HTTP_PROXY_SOCKET_ADDR
-          value: "0.0.0.0:7070"
-        - name: WASMTIME_HTTP_PROXY_ENABLE
-          value: "1"
-        - name: WASMTIME_HTTP_PROXY_BACKLOG
-          value: "128"
-        - name: WASMTIME_HTTP_PROXY_SERVER_MODE
-          value: h2
-        - name: WASMTIME_HTTP_PROXY_ALLOW_NETWORK
-          value: "true"
         resources:
           requests:
             cpu: 200m
@@ -47,8 +60,6 @@ spec:
           limits:
             cpu: 300m
             memory: 128Mi
-      restartPolicy: Always
-      runtimeClassName: wasmtime
 ---
 apiVersion: v1
 kind: Service
@@ -69,5 +80,3 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: cartservice
----
-
