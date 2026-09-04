@@ -150,6 +150,12 @@ profiles:
   - op: add
     path: /manifests/kustomize/paths/-
     value: kustomize/addons/frontend-metrics
+# Additive (-p wasi-tcp,tester-nodeports): NodePorts for the per-service campaign.
+- name: tester-nodeports
+  patches:
+  - op: add
+    path: /manifests/kustomize/paths/-
+    value: kustomize/addons/tester-nodeports
 - name: baseline
   patches:
   - op: replace

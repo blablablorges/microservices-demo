@@ -1,0 +1,8 @@
+# Standalone kustomization skaffold appends as a second manifest path (profile
+# `tester-nodeports`), like addons/frontend-metrics. Exposes the paired services
+# on fixed NodePorts so experimentes/orchestrator/stress_test.py can load one
+# service directly from the control plane (per-service campaign).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- tester-nodeports.yaml
