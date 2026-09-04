@@ -97,28 +97,28 @@ build:
     custom:
       buildCommand: hack/wasm-image.sh src/shippingserwasm server.wasm --bin server
       dependencies:
-        paths: [src/shippingserwasm/**, src/lib/**, protos/**, wit/**]
+        paths: [src/shippingserwasm/**, src/lib/**, protos/**]
         ignore: ["**/target/**"]
   - image: recommendationserwasm
     context: .
     custom:
       buildCommand: hack/wasm-image.sh src/recommendationserwasm server.wasm --bin server
       dependencies:
-        paths: [src/recommendationserwasm/**, src/lib/**, protos/**, wit/**]
+        paths: [src/recommendationserwasm/**, src/lib/**, protos/**]
         ignore: ["**/target/**"]
   - image: cartserwasm
     context: .
     custom:
       buildCommand: hack/wasm-image.sh src/cartserwasm server.wasm --bin server
       dependencies:
-        paths: [src/cartserwasm/**, src/lib/**, protos/**, wit/**]
+        paths: [src/cartserwasm/**, src/lib/**, protos/**]
         ignore: ["**/target/**"]
   - image: syntheticservicewasm
     context: .
     custom:
       buildCommand: hack/wasm-image.sh src/syntheticservicewasm server.wasm --bin server
       dependencies:
-        paths: [src/syntheticservicewasm/**, src/lib/**, protos/**, wit/**]
+        paths: [src/syntheticservicewasm/**, src/lib/**, protos/**]
         ignore: ["**/target/**"]
   tagPolicy:
     gitCommit: {}

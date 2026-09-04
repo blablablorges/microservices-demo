@@ -46,8 +46,8 @@ impl WorkloadConfig {
 
 // ---------------------------------------------------------------------------
 // I/O traits
-// WASM impls live in main.rs (WASI HTTP / WASI TCP).
-// Native impls live in server.rs (tonic / redis crate).
+// WP-J2: one set of impls in main.rs (tonic channel / redis crate), built for
+// both wasm32-wasip2 and native.
 // ---------------------------------------------------------------------------
 
 #[tonic::async_trait]

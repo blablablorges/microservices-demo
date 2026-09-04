@@ -106,12 +106,15 @@ impl CartService for CartServiceImpl {
 // Entry point
 // ---------------------------------------------------------------------------
 
-fn normalize_redis_url(addr: &str) -> String {
-    if addr.starts_with("redis://") || addr.starts_with("rediss://") {
-        addr.to_string()
-    } else {
-        format!("redis://{}/", addr)
-    }
+// Resolved once at startup: tokio's resolver falls back to spawn_blocking for a
+// hostname, and wasip2 has no threads (found in-cluster by the synthetic port).
+fn redis_url(addr: &str) -> Result<String> {
+    let hostport = addr.strip_prefix("redis://").unwrap_or(addr).trim_end_matches('/');
+    let sock = std::net::ToSocketAddrs::to_socket_addrs(hostport)
+        .ok()
+        .and_then(|mut it| it.next())
+        .with_context(|| format!("cannot resolve {}", addr))?;
+    Ok(format!("redis://{}/", sock))
 }
 
 // WP-J1/H3: one source for both targets. current_thread on both — wasip2 has no
@@ -130,7 +133,7 @@ async fn main() -> Result<()> {
         .await
         .context("bind failed")?;
 
-    let client = redis::Client::open(normalize_redis_url(&redis_addr))
+    let client = redis::Client::open(redis_url(&redis_addr)?)
         .context("failed to create Redis client")?;
     let service = CartServiceImpl {
         store: Arc::new(RedisStore { client, conn: Mutex::new(None) }),

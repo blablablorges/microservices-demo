@@ -1,3 +1,6 @@
+# WP-J2: identical to components/with-syntheticservice-docker/syntheticservice.yaml
+# except image and runtimeClassName. The guest owns its own listener on 50055,
+# so there is no host-side proxy and no WASMTIME_* env.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,7 +27,6 @@ spec:
       labels:
         app: syntheticservice
     spec:
-      restartPolicy: Always
       runtimeClassName: wasmtime
       serviceAccountName: syntheticservice
       securityContext:
@@ -36,26 +38,14 @@ spec:
       - name: server
         image: syntheticservicewasm
         ports:
-        - containerPort: 8080
+        - containerPort: 50055
         env:
         - name: PORT
           value: "50055"
-        - name: WASMTIME_HTTP_PROXY_ENABLE
-          value: "1"
         - name: PRODUCT_CATALOG_SERVICE_ADDR
           value: "productcatalogservice:3550"
         - name: REDIS_ADDR
           value: "redis-cart:6379"
-        - name: WASMTIME_HTTP_PROXY_SOCKET_ADDR
-          value: "0.0.0.0:8080"
-        - name: WASMTIME_HTTP_PROXY_ENABLE
-          value: "1"
-        - name: WASMTIME_HTTP_PROXY_BACKLOG
-          value: "128"
-        - name: WASMTIME_HTTP_PROXY_SERVER_MODE
-          value: h2
-        - name: WASMTIME_HTTP_PROXY_ALLOW_NETWORK
-          value: "true"
         # inject stress level from configmap:
         envFrom:
         - configMapRef:
@@ -87,7 +77,7 @@ spec:
   ports:
   - name: grpc
     port: 50055
-    targetPort: 8080
+    targetPort: 50055
 ---
 apiVersion: v1
 kind: Service
@@ -102,7 +92,7 @@ spec:
   ports:
   - name: grpc
     port: 50055
-    targetPort: 8080
+    targetPort: 50055
     nodePort: 30055
 ---
 apiVersion: v1
