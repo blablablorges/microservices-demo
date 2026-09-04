@@ -50,6 +50,11 @@ spec:
         image: cartserwasm
         ports:
         - containerPort: 7070
+        readinessProbe:
+          grpc:
+            port: 7070
+          periodSeconds: 2
+          failureThreshold: 3
         env:
         - name: REDIS_ADDR
           value: "redis-cart:6379"

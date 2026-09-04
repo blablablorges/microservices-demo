@@ -44,6 +44,12 @@ spec:
         image: shippingservice
         ports:
         - containerPort: 50051
+        # WP-K0: Ready means the health RPC answered; same probe on both sides.
+        readinessProbe:
+          grpc:
+            port: 50051
+          periodSeconds: 2
+          failureThreshold: 3
         env:
         - name: PORT
           value: "50051"

@@ -51,6 +51,11 @@ spec:
         image: recommendationserwasm
         ports:
         - containerPort: 8080
+        readinessProbe:
+          grpc:
+            port: 8080
+          periodSeconds: 2
+          failureThreshold: 3
         env:
         - name: PORT
           value: "8080"

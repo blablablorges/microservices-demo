@@ -39,6 +39,11 @@ spec:
         image: syntheticservicewasm
         ports:
         - containerPort: 50055
+        readinessProbe:
+          grpc:
+            port: 50055
+          periodSeconds: 2
+          failureThreshold: 3
         env:
         - name: PORT
           value: "50055"
