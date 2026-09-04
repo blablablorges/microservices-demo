@@ -48,8 +48,6 @@ spec:
             cpu: 100m
             memory: 64Mi
       dnsPolicy: ClusterFirst
-      nodeSelector:
-        runtime: wasmtime
       restartPolicy: Always
       runtimeClassName: wasmtime
 ---

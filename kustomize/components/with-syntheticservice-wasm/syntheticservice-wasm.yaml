@@ -24,8 +24,6 @@ spec:
       labels:
         app: syntheticservice
     spec:
-      nodeSelector:
-        runtime: wasmtime
       restartPolicy: Always
       runtimeClassName: wasmtime
       serviceAccountName: syntheticservice

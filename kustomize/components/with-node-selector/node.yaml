@@ -7,4 +7,3 @@ spec:
     spec:
       nodeSelector:
         role: sut
-        runtime: wasmtime

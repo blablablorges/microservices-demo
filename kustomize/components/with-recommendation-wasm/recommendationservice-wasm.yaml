@@ -65,8 +65,6 @@ spec:
           limits:
             cpu: 200m
             memory: 450Mi
-      nodeSelector:
-        runtime: wasmtime
       restartPolicy: Always
       runtimeClassName: wasmtime
 ---
