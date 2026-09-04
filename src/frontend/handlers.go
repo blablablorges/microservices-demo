@@ -26,6 +26,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -55,6 +56,21 @@ var (
 )
 
 var validEnvs = []string{"local", "gcp", "azure", "aws", "onprem", "alibaba"}
+
+var platOnce sync.Once
+
+// detectPlatform: ENV_PLATFORM if valid, else local; a resolvable GCP metadata host overrides.
+func detectPlatform() {
+	env := os.Getenv("ENV_PLATFORM")
+	if env == "" || !stringinSlice(validEnvs, env) {
+		env = "local"
+	}
+	if addrs, err := net.LookupHost("metadata.google.internal."); err == nil && len(addrs) >= 0 {
+		env = "gcp"
+	}
+	plat = platformDetails{}
+	plat.setPlatformDetails(strings.ToLower(env))
+}
 
 func (fe *frontendServer) homeHandler(w http.ResponseWriter, r *http.Request) {
 	log := r.Context().Value(ctxKeyLog{}).(logrus.FieldLogger)
@@ -89,23 +105,9 @@ func (fe *frontendServer) homeHandler(w http.ResponseWriter, r *http.Request) {
 		ps[i] = productView{p, price}
 	}
 
-	// Set ENV_PLATFORM (default to local if not set; use env var if set; otherwise detect GCP, which overrides env)_
-	var env = os.Getenv("ENV_PLATFORM")
-	// Only override from env variable if set + valid env
-	if env == "" || stringinSlice(validEnvs, env) == false {
-		fmt.Println("env platform is either empty or invalid")
-		env = "local"
-	}
-	// Autodetect GCP
-	addrs, err := net.LookupHost("metadata.google.internal.")
-	if err == nil && len(addrs) >= 0 {
-		log.Debugf("Detected Google metadata server: %v, setting ENV_PLATFORM to GCP.", addrs)
-		env = "gcp"
-	}
-
-	log.Debugf("ENV_PLATFORM is: %s", env)
-	plat = platformDetails{}
-	plat.setPlatformDetails(strings.ToLower(env))
+	// Once per process, not per request: the GCP autodetect is a DNS lookup of a
+	// name that does not exist off GCP, and every home page paid its timeout.
+	platOnce.Do(detectPlatform)
 
 	if err := templates.ExecuteTemplate(w, "home", injectCommonTemplateData(r, map[string]interface{}{
 		"show_currency": true,
