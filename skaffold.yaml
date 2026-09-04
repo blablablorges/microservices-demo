@@ -90,11 +90,12 @@ build:
   # Wasm components (WP-H0). Same crates as the native images above, built by
   # hack/wasm-image.sh for wasm32-wasip2 and pushed to the registry like every
   # other artifact, so the manifests name them by artifact and skaffold rewrites
-  # the ref. --lib selects the cdylib component (the bins are the native builds).
+  # the ref. --lib selects the cdylib component (the bins are the native builds);
+  # shippingserwasm is WP-J1: one --bin server source for both targets.
   - image: shippingserwasm
     context: .
     custom:
-      buildCommand: hack/wasm-image.sh src/shippingserwasm shippingserwasm.wasm --lib
+      buildCommand: hack/wasm-image.sh src/shippingserwasm server.wasm --bin server
       dependencies:
         paths: [src/shippingserwasm/**, src/lib/**, protos/**, wit/**]
         ignore: ["**/target/**"]

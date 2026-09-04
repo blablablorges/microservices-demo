@@ -52,3 +52,7 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+# WP-J1: see src/lib/mio/HYRBID-PATCH.md
+[patch.crates-io]
+mio = { path = "../lib/mio" }
