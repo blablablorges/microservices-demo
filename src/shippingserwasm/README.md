@@ -9,17 +9,15 @@ Prerequisites:
 
 ## deployment
 
-`src/main.rs` contains the rust source code
+`src/main.rs` is the one source built for both targets — a tonic gRPC server
+that binds its own TCP listener.
 
-Compile it to a webassembly component via
+Native binary:
 ```
-cargo build --lib --target wasm32-wasip2 --release && \
-cp target/wasm32-wasip2/release/shippingserwasm.wasm .
+cargo build --release --bin server
 ```
-Once compiled, build and run a server that and executes a WebAssembly component using Wasmtime's WASI runtime
+Wasm component (a WASI P2 command component, runs long-lived under
+`containerd-shim-wasmtime`):
 ```
-cargo build --bin serve
-```
-```
-cargo run --bin serve
+cargo build --release --target wasm32-wasip2 --bin server
 ```

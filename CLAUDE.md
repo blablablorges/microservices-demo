@@ -4,50 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Fork of Google's [Online Boutique](https://github.com/GoogleCloudPlatform/microservices-demo) with several services rewritten in Rust and compiled to WebAssembly (WASI P2). Research project comparing Wasm microservice execution against native containers on Kubernetes.
+Fork of Google's [Online Boutique](https://github.com/GoogleCloudPlatform/microservices-demo) with several services rewritten in Rust and built two ways — native container and WASI P2 Wasm component — for comparing execution on Kubernetes.
 
 ## Build commands
 
-### Wasm services (compile to `.wasm` component)
+Each `*serwasm` crate (`shippingserwasm`, `cartserwasm`, `recommendationserwasm`, `syntheticservicewasm`) has one binary, `server`, at `src/main.rs`, built for both targets from the same source:
 
-Each `*serwasm` crate builds two artifacts:
-
-1. **Wasm component** (guest — runs inside wasmtime):
 ```sh
 cd src/<SERVICE>serwasm
-cargo build --lib --target wasm32-wasip2 --release
-cp target/wasm32-wasip2/release/<SERVICE>serwasm.wasm .
+cargo build --release --bin server                          # native
+cargo build --release --target wasm32-wasip2 --bin server    # wasm component
 ```
 
-2. **Native host server** (serve.rs — runs wasmtime, exposes gRPC):
-```sh
-cargo build --bin serve --release
-```
+Required toolchain: `rustup target add wasm32-wasip2`. The crate's `.cargo/config.toml` adds `-C target-feature=+crt-static` (both native targets) and `-C target-cpu=x86-64-v3` (x86_64 only, the SUT ISA — never `target-cpu=native`); inside Docker an explicit `--target` is needed so those rustflags don't land on proc-macros, which can't be statically linked. The wasm target's config adds `--cfg tokio_unstable` (tokio gates `net` on wasm behind it).
 
-3. **Native standalone server** (server.rs — no wasmtime, direct gRPC):
-```sh
-cargo build --bin server --release
-```
+The wasm build produces a WASI P2 *command* component that binds its own TCP listener and runs long-lived under the unmodified upstream `containerd-shim-wasmtime` (RuntimeClass `wasmtime`) — no `serve.rs` host, no `--lib`/cdylib, no `wasi:http`, no `WASMTIME_*` env.
 
-Required toolchain: `rustup target add wasm32-wasip2`
-
-### Shipping gRPC test client
-
-`src/shippingservice` is only the `shipping-client` test binary now; the container baseline
-for shipping is `shippingserwasm`'s `bin/server.rs`, same as cart and recommendation (WP-A3).
+### Full cluster deploy (Skaffold)
 
 ```sh
-cd src/shippingservice
-cargo build
-```
-
-### Full cluster deploy (Skaffold + Minikube)
-
-```sh
-minikube start --cpus=4 --memory 4096 --disk-size 32g
 skaffold run        # build + deploy all services
-skaffold dev        # rebuild on code change
-skaffold delete     # cleanup
+skaffold dev         # rebuild on code change
+skaffold delete       # cleanup
 kubectl port-forward deployment/frontend 8080:8080
 ```
 
@@ -59,36 +37,31 @@ cd src/shippingservice
 cargo run --bin shipping-client
 ```
 
+## Images
+
+Skaffold builds and pushes every artifact to the cluster-local registry (`build.local.push: true` — kind included, since a wasm image can't be `kind load`ed). Native images use each crate's Dockerfile: `cargo build --target <triple> --bin server --release` in a `rust:1.92-bookworm` builder, copied into a `scratch` runtime stage (static binary, `USER 65534`). Wasm images go through the custom builder `hack/wasm-image.sh`: `cargo build --target wasm32-wasip2` → `oci-tar-builder` (keeps the wasm layer media type the shim precompiles from) → `ctr images import`/`push`. Needs `oci-tar-builder` on PATH, and on kind, `KIND_NODE` set so the script can `docker cp`/`docker exec` into the node's containerd instead of using the host's.
+
 ## Architecture
 
-### Two-tier design in Wasm services
+One `src/main.rs` per `*serwasm` crate is a tonic 0.14 gRPC server, `#[tokio::main(flavor = "current_thread")]` on both targets (same scheduler on both sides for a fair comparison), serving via `Server::serve_with_incoming(TcpListenerStream::new(listener))` over a `TcpListener` it binds itself. `src/core.rs` holds the service logic behind traits; datastore/outbound adapters (the `redis` crate, a tonic `Channel`) are the same source on both targets. Outbound addresses (`REDIS_ADDR`, `PRODUCT_CATALOG_SERVICE_ADDR`) are resolved once at startup to an IP literal and handed to the client as such — tokio's/hyper-util's resolver needs a blocking thread, which wasip2 cannot spawn.
 
-Each `*serwasm` crate contains:
+### Vendored dependency fixes (`src/lib/{mio,socket2,tonic}`)
 
-- `src/main.rs` — **Wasm guest**: implements gRPC service logic using `wasi_grpc_server::grpc_component` macro. Compiled to `.wasm` component targeting `wasm32-wasip2`. Has no system dependencies (uses WASI sockets/HTTP for Redis and outbound calls).
-- `bin/serve.rs` — **Native host**: loads and runs the `.wasm` component via wasmtime, exposes gRPC over TCP. Uses `wasmtime`, `wasmtime-wasi`, `wasmtime-wasi-http`.
-- `bin/server.rs` — **Native standalone**: same gRPC interface, standard Rust deps (tokio, redis crate). Used for the containerized baseline and Docker images.
-- `src/lib/wasi-grpc-server/` (one copy, shared by all `*serwasm` crates via path dependency) — proc-macro crate that implements the `#[grpc_component]` attribute, wiring tonic gRPC dispatch into the WASI HTTP incoming-handler interface.
+Each is a vendored crate with one behavioural change for wasip2, wired into every service crate via an identical `[patch.crates-io]` table (asserted, along with identical `[profile.release]` and `.cargo/config.toml`, by `experimentes/orchestrator/deployment_symmetry.py`). One line each — see the crate's `HYRBID-PATCH.md` for the full story:
 
-The Cargo.toml uses `[target.'cfg(not(target_family = "wasm"))'.dependencies]` to gate native-only deps (wasmtime, tokio, redis) out of the Wasm build.
-
-### WIT world (`./wit/`)
-
-Custom WIT world (`service`) extends `wasi:http/proxy@0.2.2` with:
-- `wasi:sockets/imports@0.2.2` — raw TCP for Redis (cartserwasm, syntheticservicewasm)
-- `wasi:cli/environment@0.2.2` — env var access
-
-Both host (`serve.rs`, wasmtime bindgen) and guest (`main.rs`, wit_bindgen) generate bindings from `../../wit`.
+- `mio` — `TcpStream::accept()` used `fcntl(F_SETFL, O_NONBLOCK)`, which wasi-libc answers with `EBADF` for wasip2 sockets; now `set_nonblocking(true)`.
+- `socket2` — same `fcntl` defect in `set_nonblocking()`, which broke hyper-util's `HttpConnector` on the first byte of every outbound dial.
+- `tonic` — the `channel` feature's UDS connector was gated `not(windows)`, unconditionally pulling in `tokio::net::UnixStream`, which wasip2 doesn't have; now gated `cfg(unix)`.
 
 ### Services
 
 | Service | Language | Notes |
 |---|---|---|
-| `shippingserwasm` | Rust/Wasm | Shipping cost/tracking — simplest Wasm service, no external deps |
-| `recommendationserwasm` | Rust/Wasm | Product recommendations — outbound gRPC to productcatalog via WASI HTTP |
-| `cartserwasm` | Rust/Wasm | Shopping cart — Redis via WASI sockets |
-| `syntheticservicewasm` | Rust/Wasm | Benchmark-only synthetic service — exercises compute/network/data workloads |
-| `shippingservice` | Rust (native) | Only the `shipping-client` test binary; the shipping baseline image is built from `shippingserwasm`'s `bin/server.rs` |
+| `shippingserwasm` | Rust | Shipping cost/tracking — no external deps |
+| `recommendationserwasm` | Rust | Product recommendations — outbound gRPC to productcatalog via a tonic `Channel` |
+| `cartserwasm` | Rust | Shopping cart — Redis via the `redis` crate |
+| `syntheticservicewasm` | Rust | Benchmark-only synthetic service — compute/network/data workloads, outbound gRPC to productcatalog |
+| `shippingservice` | Rust (native only) | `shipping-client` test binary only |
 | All others | Go/Python/Node/Java/C# | Upstream Google microservices, unchanged |
 
 ### Kustomize overlays (`./kustomize/overlays/`)
@@ -96,20 +69,25 @@ Both host (`serve.rs`, wasmtime bindgen) and guest (`main.rs`, wit_bindgen) gene
 | Overlay | Description |
 |---|---|
 | `baseline` | All services as containers |
-| `wasi-vanilla` | shippingserwasm deployed via wasmtime host |
+| `wasi-vanilla` | shipping as Wasm |
 | `wasi-grpc` | shipping + recommendation as Wasm |
 | `wasi-tcp` | shipping + recommendation + cart as Wasm |
-| `wasi-all` | All Wasm services |
-| `synthetic-baseline` | Synthetic service as container |
-| `synthetic-wasm` | Synthetic service as Wasm |
+| `wasi-all` | shipping + recommendation + cart + synthetic as Wasm |
+| `synthetic-baseline` | Synthetic service as container, standalone |
+| `synthetic-wasm` | Synthetic service as Wasm, standalone |
+
+Each also has a `*-with-autoscaling` variant (HPA added).
+
+### Kustomize pairs
+
+Each service has `with-<svc>-docker` and `with-<svc>-wasm` components under `kustomize/components/`; the `-wasm` manifest is the `-docker` manifest plus `image:` and `runtimeClassName: wasmtime` — nothing else may differ (checked by `deployment_symmetry.py`).
 
 ### Proto definitions
 
-All gRPC service definitions in `./protos/demo.proto`. Each Rust crate's `build.rs` calls `tonic-build` to generate bindings from this shared proto.
+All gRPC service definitions in `./protos/demo.proto`. Each crate's `build.rs` calls `tonic-prost-build` with `.build_transport(false)` — the generated client would otherwise reference `tonic::transport::{Channel, Endpoint}`, which live behind the `channel` feature that only recommendation/synthetic enable (cart and shipping don't need it).
 
 ## Key dependencies
 
-- **wasmtime 27.0** with `component-model` + `async` features
-- **tonic 0.13.1** — gRPC, used in both Wasm guest (codegen only, no transport) and native host
-- **wasi-hyperium 0.3.0** — bridges WASI HTTP types to Hyper for use inside Wasm
-- **wasi 0.13.1** — raw WASI bindings for socket calls
+- **tonic 0.14** / **tonic-prost 0.14** — gRPC
+- **tokio 1.53**
+- **redis 0.32** (`tokio-comp`) — cart, synthetic
