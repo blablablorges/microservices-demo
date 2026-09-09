@@ -302,6 +302,12 @@ impl Write for TcpStream {
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        #[cfg(target_os = "wasi")]
+        if bufs.iter().filter(|b| !b.is_empty()).count() > 1 {
+            // wasip2 std sends only the first buffer while tokio advertises vectored I/O (WP-J4)
+            let joined: Vec<u8> = bufs.iter().flat_map(|b| b.iter().copied()).collect();
+            return self.inner.do_io(|mut inner| inner.write(&joined));
+        }
         self.inner.do_io(|mut inner| inner.write_vectored(bufs))
     }
 
@@ -316,6 +322,12 @@ impl Write for &'_ TcpStream {
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        #[cfg(target_os = "wasi")]
+        if bufs.iter().filter(|b| !b.is_empty()).count() > 1 {
+            // wasip2 std sends only the first buffer while tokio advertises vectored I/O (WP-J4)
+            let joined: Vec<u8> = bufs.iter().flat_map(|b| b.iter().copied()).collect();
+            return self.inner.do_io(|mut inner| inner.write(&joined));
+        }
         self.inner.do_io(|mut inner| inner.write_vectored(bufs))
     }
 
